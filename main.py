@@ -39,7 +39,10 @@ DOWNLOADS_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "downloads")
 # Mods the user supplies themselves (their own builds, private mods): files
 # dropped in this folder are listed under "Local mods" and install through
 # the same pipeline as a Nexus download. See docs/local-install.md.
-LOCAL_MODS_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "local-mods")
+#
+# ~/local-mods, NOT under the plugin's runtime dir: Decky makes that root-
+# owned, so a user could not copy a file in from Dolphin or scp without sudo.
+LOCAL_MODS_DIR = os.path.join(decky.DECKY_USER_HOME, "local-mods")
 LOCAL_ARCHIVE_EXTS = (".zip", ".7z", ".rar")
 SAVE_BACKUPS_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "save-backups")
 STEAM_USERDATA = os.path.join(decky.DECKY_USER_HOME, ".steam", "steam", "userdata")
@@ -11169,6 +11172,25 @@ def _archive_cache_path(mod_id: int, file_id: int, file_name: str) -> str:
     return os.path.join(DOWNLOADS_DIR, f"{mod_id}-{file_id}{ext}")
 
 
+def _ensure_local_mods_dir() -> None:
+    """Create LOCAL_MODS_DIR owned by the user, not by root.
+
+    Decky runs the plugin as root, so a plain makedirs would create a folder
+    the user cannot write to - the very thing choosing ~/local-mods avoids.
+    Ownership is copied from the home directory it sits in. No-op where
+    there is no chown (Windows test runs) or the folder already exists.
+    """
+    if os.path.isdir(LOCAL_MODS_DIR):
+        return
+    os.makedirs(LOCAL_MODS_DIR, exist_ok=True)
+    if hasattr(os, "chown") and hasattr(os, "geteuid") and os.geteuid() == 0:
+        try:
+            st = os.stat(os.path.dirname(LOCAL_MODS_DIR))
+            os.chown(LOCAL_MODS_DIR, st.st_uid, st.st_gid)
+        except OSError as e:
+            decky.logger.warning(f"couldn't chown {LOCAL_MODS_DIR}: {e}")
+
+
 def _local_mod_ids(name: str) -> tuple:
     """Stand-in (mod_id, file_id) for a mod that has no Nexus page.
 
@@ -16811,7 +16833,7 @@ query Link($slug: String!, $domainName: String!) {
         """Files the user has dropped in LOCAL_MODS_DIR, for the Local mods
         list. Creates the folder so there is somewhere to drop them."""
         try:
-            os.makedirs(LOCAL_MODS_DIR, exist_ok=True)
+            _ensure_local_mods_dir()
             files = []
             for name in sorted(os.listdir(LOCAL_MODS_DIR), key=str.lower):
                 path = _local_source(name)

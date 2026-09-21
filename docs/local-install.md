@@ -11,8 +11,10 @@ written yet. Nothing here has run on a device.
 ## User flow
 
 1. Copy a `.zip`, `.7z`, `.rar`, or a bare `.esm` / `.esp` / `.esl` into
-   `~/homebrew/data/Nexus Mods/local-mods/` (the plugin's runtime dir; the
-   backend reports the exact path as `dir` from `list_local_mods`).
+   `~/local-mods/` in the Deck user's home. It is created (owned by you, not
+   root) the first time the list is opened, and it is deliberately not under
+   `~/homebrew`, which Decky makes root-owned. The backend reports the exact
+   path as `dir` from `list_local_mods`.
 2. Open the plugin, go to the game, open **Local mods**, pick the file, install.
 3. It appears in **My Mods** like any other mod and can be disabled, re-enabled
    and uninstalled there.

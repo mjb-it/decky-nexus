@@ -1516,6 +1516,20 @@ class TestLocalInstall(GameDirTestCase):
         self.assertTrue(out["ok"], out.get("error"))
         self.assertFalse(os.path.exists(os.path.join(self.data, "Thing.esm")))
 
+    def test_default_folder_is_local_mods_in_the_users_home(self):
+        # a user-owned folder, so files can be dropped in without root
+        self.assertEqual(
+            main.LOCAL_MODS_DIR,
+            os.path.join(main.decky.DECKY_USER_HOME, "local-mods"),
+        )
+
+    def test_listing_creates_the_folder_if_missing(self):
+        shutil.rmtree(main.LOCAL_MODS_DIR, ignore_errors=True)
+        out = run(self.plugin.list_local_mods())
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["files"], [])
+        self.assertTrue(os.path.isdir(main.LOCAL_MODS_DIR))
+
     def test_two_local_mods_get_distinct_ids(self):
         a = main._local_mod_ids("Alpha")
         b = main._local_mod_ids("Beta")
