@@ -5,8 +5,9 @@ patch you made. It goes through the same pipeline as a Nexus download, so
 extraction, the Data merge, plugin activation, enable/disable and uninstall
 are the existing code, and no Nexus account or API key is needed.
 
-**Status:** backend done and tested. The frontend (a "Local mods" list) is not
-written yet. Nothing here has run on a device.
+**Status:** backend and frontend written and tested (typecheck, all JS suites,
+the Python suite and the production bundle). **Nothing here has run on a
+device yet.**
 
 ## User flow
 
@@ -15,7 +16,9 @@ written yet. Nothing here has run on a device.
    root) the first time the list is opened, and it is deliberately not under
    `~/homebrew`, which Decky makes root-owned. The backend reports the exact
    path as `dir` from `list_local_mods`.
-2. Open the plugin, go to the game, open **Local mods**, pick the file, install.
+2. Open the **Local** tab (or **Local mods →** in the Quick Access panel), pick
+   the game from the dropdown at the top, and press **Install** on the file.
+   Only the Data-folder (Bethesda-style) games are offered for now.
 3. It appears in **My Mods** like any other mod and can be disabled, re-enabled
    and uninstalled there.
 
@@ -57,22 +60,32 @@ refused.
 
 Tests: `TestLocalInstall` in `tests/test_backend.py`.
 
+## Frontend
+
+- `src/LocalPage.tsx`: the **Local** tab. A game dropdown (games with
+  `installMode === "dataDir"`), the folder path, the files with an Install
+  button each, and Refresh. An archive that needs a folder choice reuses
+  `PayloadChoiceModal`; a FOMOD wizard archive is refused with a message.
+- `src/api.ts`: `listLocalMods` and `installLocalMod`. Arguments are
+  positional; the four after `mods_subdir` are `...modeParams(game)`.
+- `src/Tabs.tsx`, `src/navRules.ts`, `src/index.tsx`, `tests/nav.test.mjs`:
+  tab, page id, route, and the per-tab navigation checks. A "Local mods →"
+  button in the Quick Access panel for Data-folder games.
+
 ## Still to do
 
-- **Frontend.** `api.ts` callables for the two methods (`TestCallableArity`
-  checks their arity against the backend, and args are passed positionally, so
-  keep the order above), a "Local mods" section reached from the game page, and
-  mapping `SupportedGame` (`modeParams(game)` etc.) onto the install args the
-  way the Nexus install button does.
-- **Manual QA on a device**, since only the backend has been exercised here.
+- **Manual QA on a device.** Only code and tests have run.
 - **Starfield plugin activation is unverified.** `games.ts` still carries the
   TODO that Starfield may not read `Plugins.txt` on its own (community history
   says it needed the `StarfieldCustom.ini` workaround or a "Plugins.txt
   Enabler" mod). A local `.esm` install writes `Plugins.txt` the same way a
   Nexus one does, so it inherits that uncertainty. Check on the device that
   the game actually loads the plugin.
+- **Other install modes.** `install_local_mod` does not carry the UE4SS,
+  Witcher, Cyberpunk, pak-patch or ReShade layout settings, so the page only
+  offers Data-folder games. Adding one means passing its extra arguments.
 - **A URL source** (a private release asset) would be a second staging step in
   front of the same install; not started.
-- Local mods do not get update checks, endorsements or a Nexus page link.
-  That is by design, but the My Mods row should say "Local" rather than show a
-  blank page link.
+- Local mods have no update checks, endorsements or Nexus page link, by
+  design. The My Mods row does not yet say "Local" instead of showing a blank
+  page link.

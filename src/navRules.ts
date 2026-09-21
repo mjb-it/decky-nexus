@@ -15,6 +15,7 @@ export type PageId =
   | "downloads"
   | "health"
   | "loadorder"
+  | "local"
   | "manager"
   | "updates";
 

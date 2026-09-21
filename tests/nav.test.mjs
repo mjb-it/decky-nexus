@@ -51,6 +51,7 @@ const TAB_PAGE_FILE = {
   store: "BrowsePage.tsx",
   downloads: "DownloadsPage.tsx",
   manager: "ManagerPage.tsx",
+  local: "LocalPage.tsx",
   loadorder: "LoadOrderPage.tsx",
   updates: "UpdatesPage.tsx",
   health: "HealthCheckPage.tsx",

@@ -396,6 +396,42 @@ export const installMod = callable<
   InstallResult
 >("install_mod");
 
+/** One installable file in the user's local-mods folder. */
+export interface LocalModFile {
+  file_name: string;
+  size: number;
+  modified: number;
+}
+
+/** What is in ~/local-mods. Also creates the folder (user-owned) so there is
+ * somewhere to drop files. */
+export const listLocalMods = callable<
+  [],
+  { ok: boolean; dir?: string; files?: LocalModFile[]; error?: string }
+>("list_local_mods");
+
+/** Install a file from the local-mods folder through the normal pipeline.
+ * Arguments are positional and must match main.py's install_local_mod;
+ * the four after mods_subdir are exactly modeParams(game). */
+export const installLocalMod = callable<
+  [
+    game_domain: string,
+    file_name: string,
+    mod_name: string,
+    mod_version: string,
+    install_dir: string,
+    mods_subdir: string,
+    install_mode: InstallMode,
+    app_id: number,
+    plugins_subpath: string,
+    plugins_style: "starred" | "listed",
+    payload_choice: string,
+    flat_extensions: string[],
+    process_name: string
+  ],
+  InstallResult
+>("install_local_mod");
+
 export const getDisplayFix = callable<
   [
     app_id: number,

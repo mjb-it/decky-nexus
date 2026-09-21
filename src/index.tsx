@@ -236,6 +236,7 @@ import { CollectionPage } from "./CollectionPage";
 import { DownloadsPage } from "./DownloadsPage";
 import { ModDetailPage } from "./ModDetailPage";
 import { ManagerPage } from "./ManagerPage";
+import { LocalPage } from "./LocalPage";
 import LoadOrderPage from "./LoadOrderPage";
 import { SettingsPage } from "./SettingsPage";
 import { UpdatesPage } from "./UpdatesPage";
@@ -277,6 +278,7 @@ const DOWNLOADS_ROUTE = "/nexus-mods/downloads";
 const HEALTH_ROUTE = "/nexus-mods/health";
 const UPDATES_ROUTE = "/nexus-mods/updates";
 const MANAGER_ROUTE = "/nexus-mods/manager";
+const LOCAL_ROUTE = "/nexus-mods/local";
 const LOAD_ORDER_ROUTE = "/nexus-mods/load-order";
 const SETTINGS_ROUTE = "/nexus-mods/settings";
 
@@ -2922,6 +2924,23 @@ function InstalledModsSection() {
           </ButtonItem>
         </PanelSectionRow>
       )}
+      {/* Mods from a file on the device rather than Nexus. Only the
+          Bethesda-style Data-folder games can take them so far. */}
+      {game.installMode === "dataDir" && (
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            description="Install a mod from a file in ~/local-mods"
+            onClick={() => {
+              Router.CloseSideMenus();
+              resetTabStack();
+              pushOurPage(LOCAL_ROUTE);
+            }}
+          >
+            Local mods →
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
       {/* Only games that load plugins in sequence have an order to set.
           The page itself explains the rest; this is the door. */}
       {game.pluginsTxtSubpath && (mods?.length ?? 0) > 0 && (
@@ -4412,6 +4431,7 @@ export default definePlugin(() => {
   routerHook.addRoute(HEALTH_ROUTE, HealthCheckPage, { exact: true });
   routerHook.addRoute(UPDATES_ROUTE, UpdatesPage, { exact: true });
   routerHook.addRoute(MANAGER_ROUTE, ManagerPage, { exact: true });
+  routerHook.addRoute(LOCAL_ROUTE, LocalPage, { exact: true });
   routerHook.addRoute(LOAD_ORDER_ROUTE, LoadOrderPage, { exact: true });
   routerHook.addRoute(SETTINGS_ROUTE, SettingsPage, { exact: true });
 
@@ -4493,6 +4513,7 @@ export default definePlugin(() => {
       routerHook.removeRoute(DOWNLOADS_ROUTE);
       routerHook.removeRoute(UPDATES_ROUTE);
       routerHook.removeRoute(MANAGER_ROUTE);
+      routerHook.removeRoute(LOCAL_ROUTE);
       routerHook.removeRoute(LOAD_ORDER_ROUTE);
       routerHook.removeRoute(SETTINGS_ROUTE);
       removeEventListener("backend_event", listener);
