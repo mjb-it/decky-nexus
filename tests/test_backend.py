@@ -1425,6 +1425,134 @@ class TestUninstall(GameDirTestCase):
         self.assertFalse(os.path.isdir(target))
 
 
+class TestLocalInstall(GameDirTestCase):
+    """Mods the user supplies themselves install through the normal
+    pipeline with no Nexus account, and are never looked up on Nexus."""
+
+    DOMAIN = "starfield"
+    GAME = "Local Test Game"
+
+    def setUp(self):
+        super().setUp()
+        self.data = os.path.join(self.install, "Data")
+        os.makedirs(self.data)
+        shutil.rmtree(main.LOCAL_MODS_DIR, ignore_errors=True)
+        os.makedirs(main.LOCAL_MODS_DIR)
+        # no API key: a local install must not need one
+        self.assertFalse(main._load_settings().get("api_key"))
+
+    def tearDown(self):
+        shutil.rmtree(main.LOCAL_MODS_DIR, ignore_errors=True)
+        shutil.rmtree(self.install, ignore_errors=True)
+
+    def _drop_zip(self, name, members):
+        path = os.path.join(main.LOCAL_MODS_DIR, name)
+        with zipfile.ZipFile(path, "w") as z:
+            for rel, content in members.items():
+                z.writestr(rel, content)
+        return path
+
+    def _install(self, file_name, mod_name="My Local Mod"):
+        return run(
+            self.plugin.install_local_mod(
+                self.DOMAIN, file_name, mod_name, "1.0",
+                self.GAME, "Data", install_mode="dataDir",
+            )
+        )
+
+    def test_zip_installs_without_api_key(self):
+        self._drop_zip("mod.zip", {"Thing.esm": "plugin bytes"})
+        result = self._install("mod.zip")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(os.path.isfile(os.path.join(self.data, "Thing.esm")))
+
+    def test_record_is_local_and_untracked_for_updates(self):
+        self._drop_zip("mod.zip", {"Thing.esm": "x"})
+        result = self._install("mod.zip")
+        rec = main._load_settings()["installed"][self.DOMAIN][result["folder"]]
+        self.assertEqual(rec["source"], "local")
+        self.assertEqual(rec["mod_id"], 0)
+        self.assertEqual(rec["local_file"], "mod.zip")
+        self.assertEqual(rec["mode"], "dataDir")
+        self.assertIn("Thing.esm", rec["files"])
+        # mod_id 0 is what keeps check_updates off the network: with no
+        # tracked mods it returns before resolving anything on Nexus
+        with mock.patch.object(
+            main, "_resolve_game_id",
+            side_effect=AssertionError("asked Nexus about a local mod"),
+        ):
+            out = run(self.plugin.check_updates(self.DOMAIN))
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["updates"], {})
+
+    def test_bare_plugin_file_is_wrapped_and_installed(self):
+        path = os.path.join(main.LOCAL_MODS_DIR, "InvisibleClothing.esm")
+        with open(path, "wb") as f:
+            f.write(b"TES4")
+        result = self._install("InvisibleClothing.esm", "Invisible Clothing")
+        self.assertTrue(result["ok"], result.get("error"))
+        with open(os.path.join(self.data, "InvisibleClothing.esm"), "rb") as f:
+            self.assertEqual(f.read(), b"TES4")
+        # the user's own file is left where they put it
+        self.assertTrue(os.path.isfile(path))
+
+    def test_source_file_survives_install_and_can_reinstall(self):
+        src = self._drop_zip("mod.zip", {"Thing.esm": "x"})
+        self.assertTrue(self._install("mod.zip")["ok"])
+        self.assertTrue(os.path.isfile(src))
+        os.remove(os.path.join(self.data, "Thing.esm"))
+        self.assertTrue(self._install("mod.zip")["ok"])
+        self.assertTrue(os.path.isfile(os.path.join(self.data, "Thing.esm")))
+
+    def test_uninstall_removes_the_files(self):
+        self._drop_zip("mod.zip", {"Thing.esm": "x"})
+        result = self._install("mod.zip")
+        out = run(
+            self.plugin.uninstall_mod(
+                self.DOMAIN, self.GAME, "Data", result["folder"],
+                install_mode="dataDir",
+            )
+        )
+        self.assertTrue(out["ok"], out.get("error"))
+        self.assertFalse(os.path.exists(os.path.join(self.data, "Thing.esm")))
+
+    def test_two_local_mods_get_distinct_ids(self):
+        a = main._local_mod_ids("Alpha")
+        b = main._local_mod_ids("Beta")
+        self.assertNotEqual(a, b)
+        self.assertLess(a[0], 0)
+        self.assertLess(b[0], 0)
+        self.assertEqual(a, main._local_mod_ids("alpha"))
+
+    def test_only_listed_files_are_accepted(self):
+        for bad in ("../evil.zip", "sub/mod.zip", "..\evil.zip", ".hidden.zip",
+                    "notes.txt", "", "missing.zip"):
+            self.assertEqual(main._local_source(bad), "", bad)
+            result = self._install(bad)
+            self.assertFalse(result["ok"], bad)
+
+    def test_listing_shows_only_installable_files(self):
+        self._drop_zip("b.zip", {"x.esm": "x"})
+        self._drop_zip("a.zip", {"x.esm": "x"})
+        with open(os.path.join(main.LOCAL_MODS_DIR, "readme.txt"), "w") as f:
+            f.write("not a mod")
+        out = run(self.plugin.list_local_mods())
+        self.assertTrue(out["ok"])
+        self.assertEqual([f["file_name"] for f in out["files"]], ["a.zip", "b.zip"])
+        self.assertEqual(out["dir"], main.LOCAL_MODS_DIR)
+
+    def test_nexus_install_still_needs_an_api_key(self):
+        # the waiver is for local (negative) ids only
+        result = run(
+            self.plugin.install_mod(
+                self.DOMAIN, 123, 456, "x.zip", "Real Mod", "1.0",
+                self.GAME, "Data", install_mode="dataDir",
+            )
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "Not signed in")
+
+
 class TestUe4ssRouting(unittest.TestCase):
     """UE4SS mods route to the loader's dirs: Lua/native mods as folders
     under ue4ss/Mods (with an enabled.txt drop-file), Blueprint paks flat

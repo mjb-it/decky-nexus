@@ -13,6 +13,8 @@ import ssl
 import threading
 import time
 import urllib.parse
+import zipfile
+import zlib
 
 import aiohttp
 
@@ -34,6 +36,11 @@ SETTINGS_PATH = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "settings.json")
 _SETTINGS_LOCK = threading.RLock()
 _SETTINGS_TMP_SEQ = itertools.count()
 DOWNLOADS_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "downloads")
+# Mods the user supplies themselves (their own builds, private mods): files
+# dropped in this folder are listed under "Local mods" and install through
+# the same pipeline as a Nexus download. See docs/local-install.md.
+LOCAL_MODS_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "local-mods")
+LOCAL_ARCHIVE_EXTS = (".zip", ".7z", ".rar")
 SAVE_BACKUPS_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "save-backups")
 STEAM_USERDATA = os.path.join(decky.DECKY_USER_HOME, ".steam", "steam", "userdata")
 
@@ -11162,6 +11169,71 @@ def _archive_cache_path(mod_id: int, file_id: int, file_name: str) -> str:
     return os.path.join(DOWNLOADS_DIR, f"{mod_id}-{file_id}{ext}")
 
 
+def _local_mod_ids(name: str) -> tuple:
+    """Stand-in (mod_id, file_id) for a mod that has no Nexus page.
+
+    The install pipeline names its download cache and extraction scratch
+    from these, so each local mod needs a stable pair of its own. The mod id
+    is NEGATIVE so it can never collide with a real Nexus id (all > 0), and
+    so the one guard that waives the API key can tell a local install from
+    a Nexus one. The saved record stores mod_id 0 instead - see
+    install_local_mod - which is what keeps update checks from asking Nexus
+    about a mod it has never heard of.
+    """
+    crc = zlib.crc32((name or "").lower().encode("utf-8")) & 0x3FFFFFFF
+    return -(crc + 1), 1
+
+
+def _local_source(file_name: str) -> str:
+    """Absolute path of an installable file in LOCAL_MODS_DIR, else ''.
+
+    A bare name only: the frontend picks from a listing, so anything with a
+    separator, a leading dot or an unknown extension is not something this
+    plugin offered and is refused rather than resolved.
+    """
+    if (
+        not file_name
+        or file_name != os.path.basename(file_name)
+        or "\\" in file_name
+        or file_name.startswith(".")
+    ):
+        return ""
+    if not file_name.lower().endswith(LOCAL_ARCHIVE_EXTS + PLUGIN_EXTENSIONS):
+        return ""
+    path = os.path.join(LOCAL_MODS_DIR, file_name)
+    return path if os.path.isfile(path) else ""
+
+
+def _local_download_name(file_name: str) -> str:
+    """The file name the install pipeline is told about. A bare plugin is
+    wrapped in a zip when staged, and the cache path is derived from this
+    name's extension - so staging and _download_archive must both use it
+    or the installer misses the staged copy and goes to the network."""
+    if file_name.lower().endswith(PLUGIN_EXTENSIONS):
+        return file_name + ".zip"
+    return file_name
+
+
+def _stage_local_archive(src: str, mod_id: int, file_id: int) -> str:
+    """Put a local file where _download_archive looks for a finished
+    download, so the normal install proceeds as if it had just fetched it.
+
+    A copy, never a move: the user's file stays in LOCAL_MODS_DIR so the mod
+    can be reinstalled. A bare plugin (.esm/.esp/.esl) is wrapped in a zip,
+    because the extractor wants an archive and a plugin at an archive root
+    is already understood as the Data payload.
+    """
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    name = os.path.basename(src)
+    dst = _archive_cache_path(mod_id, file_id, _local_download_name(name))
+    if name.lower().endswith(PLUGIN_EXTENSIONS):
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(src, name)
+    else:
+        shutil.copyfile(src, dst)
+    return dst
+
+
 # One session for every mod-file transfer, instead of one per request.
 # A collection pays two requests per mod (resolve the link, then the CDN),
 # and a fresh ClientSession meant a fresh TCP + TLS handshake for each -
@@ -16735,6 +16807,96 @@ query Link($slug: String!, $domainName: String!) {
             await _emit_progress(mod_id, "error", 0, str(e))
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
+    async def list_local_mods(self) -> dict:
+        """Files the user has dropped in LOCAL_MODS_DIR, for the Local mods
+        list. Creates the folder so there is somewhere to drop them."""
+        try:
+            os.makedirs(LOCAL_MODS_DIR, exist_ok=True)
+            files = []
+            for name in sorted(os.listdir(LOCAL_MODS_DIR), key=str.lower):
+                path = _local_source(name)
+                if not path:
+                    continue
+                st = os.stat(path)
+                files.append({
+                    "file_name": name,
+                    "size": st.st_size,
+                    "modified": int(st.st_mtime),
+                })
+            return {"ok": True, "dir": LOCAL_MODS_DIR, "files": files}
+        except OSError as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    async def install_local_mod(
+        self,
+        game_domain: str,
+        file_name: str,
+        mod_name: str,
+        mod_version: str,
+        install_dir: str,
+        mods_subdir: str,
+        install_mode: str = "folder",
+        app_id: int = 0,
+        plugins_subpath: str = "",
+        plugins_style: str = "starred",
+        payload_choice: str = "",
+        flat_extensions: list = None,
+        process_name: str = "",
+    ) -> dict:
+        """Install a file from LOCAL_MODS_DIR through the normal pipeline.
+
+        Stages the file as if it had been downloaded, then runs install_mod
+        with a stand-in id, so extraction, the Data merge, plugins.txt
+        activation, enable/disable and uninstall are all the code Nexus
+        installs already use. Afterwards the record is marked source
+        "local" with mod_id 0: check_updates only tracks records with a
+        truthy mod_id, so a local mod is never looked up on Nexus.
+        """
+        src = _local_source(file_name)
+        if not src:
+            return {"ok": False, "error": "Local file not found"}
+        name = (mod_name or "").strip() or os.path.splitext(file_name)[0]
+        mod_id, file_id = _local_mod_ids(name)
+        try:
+            staged = _stage_local_archive(src, mod_id, file_id)
+        except (OSError, zipfile.BadZipFile) as e:
+            return {"ok": False, "error": f"Couldn't read {file_name}: {e}"}
+        result = await self.install_mod(
+            game_domain,
+            mod_id,
+            file_id,
+            _local_download_name(file_name),
+            name,
+            mod_version or "",
+            install_dir,
+            mods_subdir,
+            install_mode=install_mode,
+            app_id=app_id,
+            plugins_subpath=plugins_subpath,
+            plugins_style=plugins_style,
+            payload_choice=payload_choice,
+            flat_extensions=flat_extensions,
+            record_source="local",
+            process_name=process_name,
+        )
+        if not result.get("ok"):
+            # A failed install must not leave a staged copy that would
+            # short-circuit the next attempt with stale bytes.
+            try:
+                os.remove(staged)
+            except OSError:
+                pass
+            return result
+        settings = _load_settings()
+        installed = settings.get("installed", {}).get(game_domain, {})
+        rec = installed.get(result.get("folder") or _safe_name(name))
+        if rec is not None:
+            rec["mod_id"] = 0
+            rec["source"] = "local"
+            rec["local_file"] = file_name
+            _save_settings(settings)
+        return result
+
     async def get_user_prefs(self) -> dict:
         return {"ok": True, "prefs": _user_prefs()}
 
@@ -16988,7 +17150,10 @@ query Link($slug: String!, $domainName: String!) {
     ) -> dict:
         settings = _load_settings()
         api_key = settings.get("api_key")
-        if not api_key:
+        # A local install (negative stand-in id) never touches Nexus: its
+        # archive was staged in the download cache, so the fetch below
+        # short-circuits and no key is needed.
+        if not api_key and int(mod_id) >= 0:
             await _emit_progress(mod_id, "error", 0, "not signed in")
             return {"ok": False, "error": "Not signed in"}
 
